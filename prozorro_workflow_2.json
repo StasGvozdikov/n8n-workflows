@@ -1,0 +1,292 @@
+{
+  "name": "Prozorro Monitoring to Google Sheets",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "e2e9b933-2a83-4a6c-941e-3620952d433f"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "read",
+        "documentId": "",
+        "sheetName": "Prices",
+        "range": "A:D",
+        "options": {
+          "headerRow": true
+        }
+      },
+      "name": "Read Prices Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [
+        450,
+        300
+      ],
+      "id": "27b7643b-3d6f-40e9-b572-132d966e3427",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIALS_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "For Each Material",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "id": "7665790b-68e1-4560-91a5-8a8b13d2fbbd"
+    },
+    {
+      "parameters": {
+        "url": "https://public.api.openprocurement.org/api/2.5/tenders",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "search_text",
+              "value": "={{$json.body[\"Назва ресурсу\"]}}"
+            },
+            {
+              "name": "status",
+              "value": "complete"
+            },
+            {
+              "name": "opt_fields",
+              "value": "id,tenderID,contracts,awards,items,value"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Search Prozorro for Material",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        870,
+        300
+      ],
+      "id": "8d8a7f43-a60d-4595-b016-0158ed52f866"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.body.data}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "If Prozorro Found Tenders",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1090,
+        300
+      ],
+      "id": "8f8e02d8-79d3-4a1d-875f-2f8450146e4c"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "={{$json.body.data}}",
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "For Each Tender Found",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        1310,
+        200
+      ],
+      "id": "f5195b07-4e3f-4e0b-9304-44b41a54019e"
+    },
+    {
+      "parameters": {
+        "functionCode": "const referenceItem = $items('For Each Material')[0].json.body;\nconst tenderItem = $items('For Each Tender Found')[0].json.body;\n\n// Combine both items for the next node\nconst mergedData = {\n  reference: referenceItem,\n  tender: tenderItem\n};\n\nreturn mergedData;"
+      },
+      "name": "Merge Tender and Reference Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1530,
+        300
+      ],
+      "id": "89ec9f73-677a-493e-8c46-77864f1412d2"
+    },
+    {
+      "parameters": {
+        "functionCode": "// 1. Get Combined Data\nconst item = items[0].json;\nconst tender = item.tender;\nconst reference = item.reference;\n\n// 2. Date Filtering Logic\nconst contracts = tender.contracts || [];\nconst awards = tender.awards || [];\n\nlet isValidDate = false;\nconst targetYear = 2025;\n\n// Check contract date (August or September)\nif (contracts.length > 0 && (contracts[0].datePublished || contracts[0].dateSigned)) {\n    const contractDate = new Date(contracts[0].datePublished || contracts[0].dateSigned);\n    const contractMonth = contractDate.getMonth(); // 7 for Aug, 8 for Sep\n    const contractYear = contractDate.getFullYear();\n    if (contractYear === targetYear && (contractMonth === 7 || contractMonth === 8)) {\n        isValidDate = true;\n    }\n}\n\n// If contract date is not valid, check award date (August)\nif (!isValidDate && awards.length > 0 && awards[0].date) {\n    const awardDate = new Date(awards[0].date);\n    const awardMonth = awardDate.getMonth(); // 7 for Aug\n    const awardYear = awardDate.getFullYear();\n    if (awardYear === targetYear && awardMonth === 7) {\n        isValidDate = true;\n    }\n}\n\n// If date is not valid, stop processing this item\nif (!isValidDate) {\n    return null;\n}\n\n// 3. Find Relevant Award and Item\nconst activeAward = (awards.find(a => a.status === 'active')) || awards[0];\nif (!activeAward) return null;\n\nconst tenderItems = tender.items || [];\nconst relevantItem = tenderItems.find(it => it.relatedLot === activeAward.lotID);\nif (!relevantItem) return null;\n\n// 4. Extract Data\nconst supplier = (activeAward.suppliers && activeAward.suppliers[0]) ? activeAward.suppliers[0] : null;\nif (!supplier) return null;\n\nconst enterprise = `${supplier.name} (${supplier.identifier.id})`;\nconst price = parseFloat(activeAward.value.amount);\nconst isVatIncluded = activeAward.value.valueAddedTaxIncluded;\nconst prozorroQuantity = parseFloat(relevantItem.quantity);\nconst prozorroUnit = (relevantItem.unit.name || '').toLowerCase();\nconst deliveryRegion = relevantItem.deliveryAddress.region || 'Не вказано';\nconst sourceLink = tender.tenderID;\n\nconst referenceUnit = (reference['Од. виміру'] || '').toLowerCase();\n\n// 5. VAT Calculation\nlet priceWithVat = price;\nif (!isVatIncluded) {\n    priceWithVat = price * 1.2;\n}\nlet pricePerUnit = priceWithVat / prozorroQuantity;\n\n// 6. Unit Conversion\nlet finalQuantity = prozorroQuantity;\nlet finalPricePerUnit = pricePerUnit;\nlet explanation = '';\n\nconst conversionFactors = {\n    'т': { 'кг': 1000 },\n    'кг': { 'т': 0.001, 'г': 1000 },\n    'м3': { 'л': 1000 },\n    'л': { 'м3': 0.001 },\n    'м.куб': { 'л': 1000 },\n    'м.куб.': { 'л': 1000 },\n    'м³': { 'л': 1000 },\n    'метр кубічний': { 'л': 1000 },\n    'м': { 'см': 100 },\n};\n\nif (prozorroUnit && referenceUnit && prozorroUnit !== referenceUnit) {\n    const pUnit = prozorroUnit.replace(/\\s/g, '');\n    const rUnit = referenceUnit.replace(/\\s/g, '');\n\n    if (pUnit === rUnit) {\n      // Units are the same after removing spaces\n    } else if (conversionFactors[rUnit] && conversionFactors[rUnit][pUnit]) {\n        const factor = conversionFactors[rUnit][pUnit];\n        finalQuantity = prozorroQuantity / factor;\n        finalPricePerUnit = pricePerUnit * factor;\n        explanation = `Ціну та кількість конвертовано з '${prozorroUnit}' в '${referenceUnit}'. Коефіцієнт: ${factor}.`;\n    } else if (conversionFactors[pUnit] && conversionFactors[pUnit][rUnit]) {\n         const factor = conversionFactors[pUnit][rUnit];\n         finalQuantity = prozorroQuantity * factor;\n         finalPricePerUnit = pricePerUnit / factor;\n         explanation = `Ціну та кількість конвертовано з '${prozorroUnit}' в '${referenceUnit}'. Коефіцієнт: 1/${factor}.`;\n    } else {\n        explanation = `Невідповідність одиниць виміру: '${prozorroUnit}' (Prozorro) не вдалося конвертувати в '${referenceUnit}' (еталон). Дані залишено без змін.`;\n    }\n}\n\n\n// 7. Construct Final Row for Google Sheets\nconst newRow = {\n    'ID ресурсу': reference['ID ресурсу'],\n    'Код ресурсу': reference['Код ресурсу'],\n    'Назва ресурсу': reference['Назва ресурсу'],\n    'Од. виміру': reference['Од. виміру'],\n    'Виробник/Постачальник': 'Постачальник',\n    'Підприємство*': enterprise,\n    'Поточна ціна з ПДВ, грн.*': finalPricePerUnit.toFixed(2).replace('.', ','),\n    'Обсяг поставок ресурсу': finalQuantity.toFixed(2).replace('.', ','),\n    'Район зберігання': deliveryRegion,\n    'Посилання на джерело': sourceLink,\n    'ПОЯСНЕННЯ': explanation\n};\n\nreturn { json: newRow };"
+      },
+      "name": "Filter & Transform Tender Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1730,
+        300
+      ],
+      "id": "e446540c-358f-4ac6-b7fa-2187f55b2591"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.json}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "Is Data Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1930,
+        300
+      ],
+      "id": "d049f5fd-48b0-4547-9759-408a287955c3"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "append",
+        "documentId": "",
+        "sheetName": "Copy of Prices",
+        "options": {}
+      },
+      "name": "Append to Copy of Prices",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [
+        2130,
+        300
+      ],
+      "id": "03e4d9ca-a212-4f3b-8588-acbbd0f6229b",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIALS_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Read Prices Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Prices Sheet": {
+      "main": [
+        [
+          {
+            "node": "For Each Material",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For Each Material": {
+      "main": [
+        [
+          {
+            "node": "Search Prozorro for Material",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Prozorro for Material": {
+      "main": [
+        [
+          {
+            "node": "If Prozorro Found Tenders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Prozorro Found Tenders": {
+      "main": [
+        [
+          {
+            "node": "For Each Tender Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For Each Tender Found": {
+      "main": [
+        [
+          {
+            "node": "Merge Tender and Reference Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Tender and Reference Data": {
+      "main": [
+        [
+          {
+            "node": "Filter & Transform Tender Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Transform Tender Data": {
+      "main": [
+        [
+          {
+            "node": "Is Data Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Data Valid?": {
+      "main": [
+        [
+          {
+            "node": "Append to Copy of Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
