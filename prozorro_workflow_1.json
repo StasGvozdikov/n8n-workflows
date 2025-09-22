@@ -1,0 +1,68 @@
+{
+  "name": "Prozorro Price Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "",
+        "sheetName": "Prices",
+        "options": {
+          "headerRow": true,
+          "columns": {
+            "mode": "include",
+            "values": "={{ [\"Назва ресурсу\", \"Од. виміру\"] }}"
+          }
+        }
+      },
+      "id": "f9g8h7i6-5j4k-3l2m-1n0o-p9q8r7s6t5u4",
+      "name": "1. Read Resources from Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [200, 320],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Вставте ID вашої Google-таблиці 'Prices' у поле 'Spreadsheet ID' та виберіть ваші облікові дані."
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "v3w2x1y0-z9a8-b7c6-d5e4-f3g2h1i0j9k8",
+      "name": "Loop Over Each Resource",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resourceName = $json.json['Назва ресурсу'];\nconst keywords = resourceName.split(' ').slice(0, 3).join(' ');\n$json.searchQuery = keywords;\nreturn $json;"
+      },
+      "id": "l2m1n0o9-p8q7-r6s5-t4u3-v2w1x0y9z8a7",
+      "name": "2. Prepare Search Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 320]
+    },
+    {
+      "parameters": {
+        "url": "https://public-api.prozorro.gov.ua/api/2.5/tenders",
+        "options": {"splitIntoItems": true},
+        "queryParameters": {
+          "q": "={{ $('2. Prepare Search Query').item.json.searchQuery }}",
+          "opt_fields": "tenderID,status,mainProcurementCategory,items,contracts"
+        }
+      },
+      "id": "b6c5d4e3-f2g1-h0i9-j8k7-l6m5n4o3p2q1",
+      "name": "3. Query Prozorro API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [860, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tender = $json;\nconst resource = $('Loop Over Each Resource').item.json.json;\nconst targetResourceName = resource['Назва ресурсу'];\nconst targetUnit = resource['Од. виміру'];\nlet results = [];\nif (tender.status !== 'complete' || tender.mainProcurementCategory !== 'goods') return null;\nif (!tender.contracts || tender.contracts.length === 0) return null;\nfor (const contract of tender.contracts) {\n  if (contract.status !== 'active') continue;\n  const contractDate = new Date(contract.dateSigned);\n  const year = contractDate.getFullYear();\n  const month = contractDate.getMonth() + 1;\n  if (year !== 2025 || (month !== 8 && month !== 9)) continue
