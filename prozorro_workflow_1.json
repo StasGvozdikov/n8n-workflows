@@ -1,146 +1,94 @@
-{
-  "name": "Prozorro Price Automation",
-  "nodes": [
-    {
-      "parameters": {},
-      "id": "1a7b8c2d-3e4f-4b5a-9d8c-5a6b7c8d9e0f",
-      "name": "Start",
-      "type": "n8n-nodes-base.start",
-      "typeVersion": 1,
-      "position": [
-        -20,
-        320
-      ]
-    },
-    {
-      "parameters": {
-        "operation": "read",
-        "documentId": "",
-        "sheetName": "Prices",
-        "options": {
-          "headerRow": true,
-          "columns": {
-            "mode": "include",
-            "values": "={{ [\"Назва ресурсу\", \"Од. виміру\"] }}"
-          }
-        }
-      },
-      "id": "f9g8h7i6-5j4k-3l2m-1n0o-p9q8r7s6t5u4",
-      "name": "1. Read Resources from Google Sheet",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4,
-      "position": [
-        200,
-        320
-      ],
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "",
-          "name": "Google Sheets account"
-        }
-      },
-      "notes": "Вставте ID вашої Google-таблиці 'Prices' у поле 'Spreadsheet ID' та виберіть ваші облікові дані."
-    },
-    {
-      "parameters": {
-        "batchSize": 1,
-        "options": {}
-      },
-      "id": "v3w2x1y0-z9a8-b7c6-d5e4-f3g2h1i0j9k8",
-      "name": "Loop Over Each Resource",
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 2,
-      "position": [
-        420,
-        320
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const resourceName = $json.json['Назва ресурсу'];\nconst keywords = resourceName.split(' ').slice(0, 3).join(' ');\n$json.searchQuery = keywords;\nreturn $json;"
-      },
-      "id": "l2m1n0o9-p8q7-r6s5-t4u3-v2w1x0y9z8a7",
-      "name": "2. Prepare Search Query",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        640,
-        320
-      ]
-    },
-    {
-      "parameters": {
-        "url": "https://public-api.prozorro.gov.ua/api/2.5/tenders",
-        "options": {
-          "splitIntoItems": true
-        },
-        "queryParameters": {
-          "q": "={{ $('2. Prepare Search Query').item.json.searchQuery }}",
-          "opt_fields": "tenderID,status,mainProcurementCategory,items,contracts"
-        }
-      },
-      "id": "b6c5d4e3-f2g1-h0i9-j8k7-l6m5n4o3p2q1",
-      "name": "3. Query Prozorro API",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [
-        860,
-        320
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const tender = $json;\nconst resource = $('Loop Over Each Resource').item.json.json;\nconst targetResourceName = resource['Назва ресурсу'];\nconst targetUnit = resource['Од. виміру'];\nconst results = [];\n\nif (tender.status !== 'complete' || tender.mainProcurementCategory !== 'goods') {\n  return null;\n}\n\nif (!tender.contracts || tender.contracts.length === 0) {\n  return null;\n}\n\nfor (const contract of tender.contracts) {\n  if (contract.status !== 'active') continue;\n\n  const contractDate = new Date(contract.dateSigned);\n  const year = contractDate.getFullYear();\n  const month = contractDate.getMonth() + 1;\n\n  if (year !== 2025 || (month !== 8 && month !== 9)) {\n    continue;\n  }\n\n  for (const item of tender.items) {\n    if (!item.description.toLowerCase().includes(targetResourceName.split(' ')[0].toLowerCase())) {\n        continue;\n    }\n\n    let price = item.unit?.value?.amount;\n    let quantity = item.quantity;\n    const sourceUnit = item.unit?.name.toLowerCase();\n    const vatIncluded = contract.value?.valueAddedTaxIncluded;\n\n    if (!price || !quantity || !sourceUnit) continue;\n\n    if (sourceUnit.startsWith('кілограм') && targetUnit.toLowerCase() === 'т') {\n      price = price * 1000;\n      quantity = quantity / 1000;\n    } else if (sourceUnit.startsWith('м3') && targetUnit.toLowerCase() === 'т') {\n      const density = 1.45;\n      price = price / density;\n      quantity = quantity * density;\n    }\n\n    const priceWithVAT = vatIncluded ? price : price * 1.2;\n\n    results.push({\n      json: {\n        resourceName: targetResourceName,\n        supplier: contract.suppliers?.[0]?.name || 'N/A',\n        price: priceWithVAT.toFixed(2),\n        volume: quantity,\n        region: item.deliveryAddress?.region || 'N/A',\n        link: `https://prozorro.gov.ua/tender/${tender.tenderID}`,\n        explanation: `Source: ${tender.tenderID}`\n      }\n    });\n  }\n}\n\nreturn results.length > 0 ? results : null;"
-      },
-      "id": "r5s4t3u2-v1w0-x9y8-z7a6-b5c4d3e2f1g0",
-      "name": "4. Filter & Process Tender Data",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1080,
-        320
-      ]
-    },
-    {
-      "parameters": {
-        "operation": "update",
-        "documentId": "",
-        "sheetName": "Prices",
-        "options": {
-          "key": "Назва ресурсу",
-          "value": "={{ $('4. Filter & Process Tender Data').item.json.resourceName }}",
-          "fields": {
-            "values": [
-              { "name": "Підприємство*", "value": "={{ $json.supplier }}" },
-              { "name": "Поточна ціна з ПДВ, грн.*", "value": "={{ $json.price }}" },
-              { "name": "Обсяг поставок ресурсу", "value": "={{ $json.volume }}" },
-              { "name": "Район зберігання", "value": "={{ $json.region }}" },
-              { "name": "Посилання на джерело", "value": "={{ $json.link }}" },
-              { "name": "ПОЯСНЕННЯ", "value": "={{ $json.explanation }}" }
-            ]
-          }
-        }
-      },
-      "id": "h9i8j7k6-l5m4-n3o2-p1q0-r9s8t7u6v5w4",
-      "name": "5. Update Google Sheet",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4,
-      "position": [
-        1300,
-        320
-      ],
-      "credentials": {
-        "googleSheetsOAuth2Api": { "id": "", "name": "Google Sheets account" }
-      }
+// Отримуємо вхідні дані від n8n.
+// Очікується, що це масив об'єктів, де кожен об'єкт має властивість 'json' з даними одного тендеру.
+const tenders = items.map(item => item.json);
+
+// Створюємо порожній масив для зберігання оброблених результатів.
+const processedResults =;
+
+// Перебираємо кожен тендер, отриманий з попереднього вузла.
+for (const tender of tenders) {
+  // --- Етап 1: Підготовка даних про переможців (Awards) ---
+
+  // Використовуємо опціональний ланцюжок (?.) та оператор нульового злиття (??)
+  // для безпечного отримання масиву нагороджень. Якщо 'tender.awards' не існує,
+  // ми отримаємо порожній масив, що запобігає помилкам.
+  const awards = tender.awards??;
+
+  // Фільтруємо нагородження, щоб залишити тільки ті, що мають статус 'active'.
+  // Це єдиний надійний спосіб визначити поточного переможця.
+  const activeAwards = awards.filter(a => a.status === 'active');
+
+  // Створюємо карту (lookup map) для швидкого доступу до даних про переможця за ID лота.
+  // Це набагато ефективніше, ніж шукати потрібне нагородження в циклі для кожного товару.
+  const awardMap = activeAwards.reduce((acc, award) => {
+    // Ключем є ID лота. Якщо lotID відсутній (для однолотових тендерів),
+    // використовуємо 'default' як ключ.
+    const key = award.lotID |
+
+| 'default';
+    acc[key] = {
+      supplier: award.suppliers?.?.name?? 'Не визначено',
+      price: award.value?.amount?? null,
+      currency: award.value?.currency?? null,
+      awardDate: award.date?? null
+    };
+    return acc;
+  }, {});
+
+  // --- Етап 2: Підготовка даних про контракти (Contracts) ---
+
+  // Аналогічно до нагороджень, створюємо карту для контрактів.
+  // Це потрібно для отримання точної дати підписання контракту.
+  const contracts = tender.contracts??;
+  const contractMap = contracts.reduce((acc, contract) => {
+    // Шукаємо пов'язане нагородження, щоб отримати ID лота.
+    const relatedAward = awards.find(a => a.id === contract.awardID);
+    if (relatedAward) {
+      const key = relatedAward.lotID |
+
+| 'default';
+      acc[key] = {
+        contractDate: contract.dateSigned?? null
+      };
     }
-  ],
-  "connections": {
-    "Start": { "main": [[{ "node": "1. Read Resources from Google Sheet", "type": "main", "index": 0 }]] },
-    "1. Read Resources from Google Sheet": { "main": [[{ "node": "Loop Over Each Resource", "type": "main", "index": 0 }]] },
-    "Loop Over Each Resource": { "main": [[{ "node": "2. Prepare Search Query", "type": "main", "index": 0 }]] },
-    "2. Prepare Search Query": { "main": [[{ "node": "3. Query Prozorro API", "type": "main", "index": 0 }]] },
-    "3. Query Prozorro API": { "main": [[{ "node": "4. Filter & Process Tender Data", "type": "main", "index": 0 }]] },
-    "4. Filter & Process Tender Data": { "main": [[{ "node": "5. Update Google Sheet", "type": "main", "index": 0 }]] }
-  },
-  "pinData": {}
+    return acc;
+  }, {});
+
+  // --- Етап 3: Обробка товарних позицій (Items) ---
+
+  // Перевіряємо, чи існує масив товарів у тендері.
+  if (tender.items && tender.items.length > 0) {
+    // Перебираємо кожну товарну позицію в тендері.
+    for (const item of tender.items) {
+      // Визначаємо ключ для пошуку в картах. Для багатолотових тендерів це 'item.relatedLot'.
+      // Для однолотових, де 'relatedLot' може бути відсутнім, використовуємо 'default'.
+      // Це дозволяє уніфікувати логіку.
+      const lotKey = item.relatedLot |
+
+| 'default';
+
+      // Отримуємо дані про переможця та контракт з наших карт.
+      const winningAward = awardMap[lotKey];
+      const signedContract = contractMap[lotKey];
+
+      // Створюємо новий "плаский" об'єкт з усіма потрібними даними.
+      const resultItem = {
+        resourceName: item.description?? 'Опис відсутній',
+        price: winningAward?.price?? tender.value?.amount?? null, // Ціна з нагородження, або очікувана вартість як fallback
+        unit: item.unit?.name?? 'Не вказано',
+        supplier: winningAward?.supplier?? 'Не визначено',
+        // Дата контракту є пріоритетною. Якщо її немає, беремо дату нагородження.
+        contractDate: signedContract?.contractDate?? winningAward?.awardDate?? null,
+        region: item.deliveryAddress?.region?? tender.procuringEntity?.address?.region?? 'Не вказано',
+        tenderLink: `https://prozorro.gov.ua/tender/${tender.tenderID}`
+      };
+
+      // Додаємо оброблений об'єкт до масиву результатів.
+      processedResults.push(resultItem);
+    }
+  }
 }
+
+// Повертаємо результат у форматі, який очікує n8n.
+// Кожен об'єкт у масиві 'processedResults' загортається в { json:... }.
+return processedResults.map(item => ({ json: item }));
