@@ -2,6 +2,17 @@
   "name": "Prozorro Price Automation",
   "nodes": [
     {
+      "parameters": {},
+      "id": "1a7b8c2d-3e4f-4b5a-9d8c-5a6b7c8d9e0f",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        320
+      ]
+    },
+    {
       "parameters": {
         "operation": "read",
         "documentId": "",
@@ -18,7 +29,10 @@
       "name": "1. Read Resources from Google Sheet",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4,
-      "position": [200, 320],
+      "position": [
+        200,
+        320
+      ],
       "credentials": {
         "googleSheetsOAuth2Api": {
           "id": "",
@@ -36,7 +50,10 @@
       "name": "Loop Over Each Resource",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 2,
-      "position": [420, 320]
+      "position": [
+        420,
+        320
+      ]
     },
     {
       "parameters": {
@@ -46,12 +63,17 @@
       "name": "2. Prepare Search Query",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [640, 320]
+      "position": [
+        640,
+        320
+      ]
     },
     {
       "parameters": {
         "url": "https://public-api.prozorro.gov.ua/api/2.5/tenders",
-        "options": {"splitIntoItems": true},
+        "options": {
+          "splitIntoItems": true
+        },
         "queryParameters": {
           "q": "={{ $('2. Prepare Search Query').item.json.searchQuery }}",
           "opt_fields": "tenderID,status,mainProcurementCategory,items,contracts"
@@ -61,8 +83,64 @@
       "name": "3. Query Prozorro API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [860, 320]
+      "position": [
+        860,
+        320
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const tender = $json;\nconst resource = $('Loop Over Each Resource').item.json.json;\nconst targetResourceName = resource['Назва ресурсу'];\nconst targetUnit = resource['Од. виміру'];\nlet results = [];\nif (tender.status !== 'complete' || tender.mainProcurementCategory !== 'goods') return null;\nif (!tender.contracts || tender.contracts.length === 0) return null;\nfor (const contract of tender.contracts) {\n  if (contract.status !== 'active') continue;\n  const contractDate = new Date(contract.dateSigned);\n  const year = contractDate.getFullYear();\n  const month = contractDate.getMonth() + 1;\n  if (year !== 2025 || (month !== 8 && month !== 9)) continue
+        "jsCode": "const tender = $json;\nconst resource = $('Loop Over Each Resource').item.json.json;\nconst targetResourceName = resource['Назва ресурсу'];\nconst targetUnit = resource['Од. виміру'];\nconst results = [];\n\nif (tender.status !== 'complete' || tender.mainProcurementCategory !== 'goods') {\n  return null;\n}\n\nif (!tender.contracts || tender.contracts.length === 0) {\n  return null;\n}\n\nfor (const contract of tender.contracts) {\n  if (contract.status !== 'active') continue;\n\n  const contractDate = new Date(contract.dateSigned);\n  const year = contractDate.getFullYear();\n  const month = contractDate.getMonth() + 1;\n\n  if (year !== 2025 || (month !== 8 && month !== 9)) {\n    continue;\n  }\n\n  for (const item of tender.items) {\n    if (!item.description.toLowerCase().includes(targetResourceName.split(' ')[0].toLowerCase())) {\n        continue;\n    }\n\n    let price = item.unit?.value?.amount;\n    let quantity = item.quantity;\n    const sourceUnit = item.unit?.name.toLowerCase();\n    const vatIncluded = contract.value?.valueAddedTaxIncluded;\n\n    if (!price || !quantity || !sourceUnit) continue;\n\n    if (sourceUnit.startsWith('кілограм') && targetUnit.toLowerCase() === 'т') {\n      price = price * 1000;\n      quantity = quantity / 1000;\n    } else if (sourceUnit.startsWith('м3') && targetUnit.toLowerCase() === 'т') {\n      const density = 1.45;\n      price = price / density;\n      quantity = quantity * density;\n    }\n\n    const priceWithVAT = vatIncluded ? price : price * 1.2;\n\n    results.push({\n      json: {\n        resourceName: targetResourceName,\n        supplier: contract.suppliers?.[0]?.name || 'N/A',\n        price: priceWithVAT.toFixed(2),\n        volume: quantity,\n        region: item.deliveryAddress?.region || 'N/A',\n        link: `https://prozorro.gov.ua/tender/${tender.tenderID}`,\n        explanation: `Source: ${tender.tenderID}`\n      }\n    });\n  }\n}\n\nreturn results.length > 0 ? results : null;"
+      },
+      "id": "r5s4t3u2-v1w0-x9y8-z7a6-b5c4d3e2f1g0",
+      "name": "4. Filter & Process Tender Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "",
+        "sheetName": "Prices",
+        "options": {
+          "key": "Назва ресурсу",
+          "value": "={{ $('4. Filter & Process Tender Data').item.json.resourceName }}",
+          "fields": {
+            "values": [
+              { "name": "Підприємство*", "value": "={{ $json.supplier }}" },
+              { "name": "Поточна ціна з ПДВ, грн.*", "value": "={{ $json.price }}" },
+              { "name": "Обсяг поставок ресурсу", "value": "={{ $json.volume }}" },
+              { "name": "Район зберігання", "value": "={{ $json.region }}" },
+              { "name": "Посилання на джерело", "value": "={{ $json.link }}" },
+              { "name": "ПОЯСНЕННЯ", "value": "={{ $json.explanation }}" }
+            ]
+          }
+        }
+      },
+      "id": "h9i8j7k6-l5m4-n3o2-p1q0-r9s8t7u6v5w4",
+      "name": "5. Update Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1300,
+        320
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "", "name": "Google Sheets account" }
+      }
+    }
+  ],
+  "connections": {
+    "Start": { "main": [[{ "node": "1. Read Resources from Google Sheet", "type": "main", "index": 0 }]] },
+    "1. Read Resources from Google Sheet": { "main": [[{ "node": "Loop Over Each Resource", "type": "main", "index": 0 }]] },
+    "Loop Over Each Resource": { "main": [[{ "node": "2. Prepare Search Query", "type": "main", "index": 0 }]] },
+    "2. Prepare Search Query": { "main": [[{ "node": "3. Query Prozorro API", "type": "main", "index": 0 }]] },
+    "3. Query Prozorro API": { "main": [[{ "node": "4. Filter & Process Tender Data", "type": "main", "index": 0 }]] },
+    "4. Filter & Process Tender Data": { "main": [[{ "node": "5. Update Google Sheet", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {}
+}
