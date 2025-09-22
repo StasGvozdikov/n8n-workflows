@@ -1,0 +1,45 @@
+{
+  "meta": {
+    "instanceId": "e9e0a73c5e7318f15c691d4a87515cb3d5a2d3a3a3e9e0a73c5e7318f15c69"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "0f8e5c33-a8b2-4f4f-9c2c-3d1b4a0e9f8d",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Отримуємо вхідні дані від n8n.\n// Очікується, що це масив об'єктів, де кожен об'єкт має властивість 'json' з даними одного тендеру.\nconst tenders = items.map(item => item.json);\n\n// Створюємо порожній масив для зберігання оброблених результатів.\nconst processedResults = [];\n\n// Перебираємо кожен тендер, отриманий з попереднього вузла.\nfor (const tender of tenders) {\n  // --- Етап 1: Підготовка даних про переможців (Awards) ---\n\n  // Використовуємо опціональний ланцюжок (?.) та оператор нульового злиття (??)\n  // для безпечного отримання масиву нагороджень. Якщо 'tender.awards' не існує,\n  // ми отримаємо порожній масив, що запобігає помилкам.\n  const awards = tender.awards ?? [];\n\n  // Фільтруємо нагородження, щоб залишити тільки ті, що мають статус 'active'.\n  // Це єдиний надійний спосіб визначити поточного переможця.\n  const activeAwards = awards.filter(a => a.status === 'active');\n\n  // Створюємо карту (lookup map) для швидкого доступу до даних про переможця за ID лота.\n  // Це набагато ефективніше, ніж шукати потрібне нагородження в циклі для кожного товару.\n  const awardMap = activeAwards.reduce((acc, award) => {\n    // Ключем є ID лота. Якщо lotID відсутній (для однолотових тендерів),\n    // використовуємо 'default' як ключ.\n    const key = award.lotID || 'default';\n    acc[key] = {\n      supplier: award.suppliers?.[0]?.name ?? 'Не визначено',\n      price: award.value?.amount ?? null,\n      currency: award.value?.currency ?? null,\n      awardDate: award.date ?? null\n    };\n    return acc;\n  }, {});\n\n  // --- Етап 2: Підготовка даних про контракти (Contracts) ---\n\n  // Аналогічно до нагороджень, створюємо карту для контрактів.\n  // Це потрібно для отримання точної дати підписання контракту.\n  const contracts = tender.contracts ?? [];\n  const contractMap = contracts.reduce((acc, contract) => {\n    // Шукаємо пов'язане нагородження, щоб отримати ID лота.\n    const relatedAward = awards.find(a => a.id === contract.awardID);\n    if (relatedAward) {\n      const key = relatedAward.lotID || 'default';\n      acc[key] = {\n        contractDate: contract.dateSigned ?? null\n      };\n    }\n    return acc;\n  }, {});\n\n  // --- Етап 3: Обробка товарних позицій (Items) ---\n\n  // Перевіряємо, чи існує масив товарів у тендері.\n  if (tender.items && tender.items.length > 0) {\n    // Перебираємо кожну товарну позицію в тендері.\n    for (const item of tender.items) {\n      // Визначаємо ключ для пошуку в картах. Для багатолотових тендерів це 'item.relatedLot'.\n      // Для однолотових, де 'relatedLot' може бути відсутнім, використовуємо 'default'.\n      // Це дозволяє уніфікувати логіку.\n      const lotKey = item.relatedLot || 'default';\n\n      // Отримуємо дані про переможця та контракт з наших карт.\n      const winningAward = awardMap[lotKey];\n      const signedContract = contractMap[lotKey];\n\n      // Створюємо новий \"плаский\" об'єкт з усіма потрібними даними.\n      const resultItem = {\n        resourceName: item.description ?? 'Опис відсутній',\n        price: winningAward?.price ?? tender.value?.amount ?? null, // Ціна з нагородження, або очікувана вартість як fallback\n        unit: item.unit?.name ?? 'Не вказано',\n        supplier: winningAward?.supplier ?? 'Не визначено',\n        // Дата контракту є пріоритетною. Якщо її немає, беремо дату нагородження.\n        contractDate: signedContract?.contractDate ?? winningAward?.awardDate ?? null,\n        region: item.deliveryAddress?.region ?? tender.procuringEntity?.address?.region ?? 'Не вказано',\n        tenderLink: `https://prozorro.gov.ua/tender/${tender.tenderID}`\n      };\n\n      // Додаємо оброблений об'єкт до масиву результатів.\n      processedResults.push(resultItem);\n    }\n  }\n}\n\n// Повертаємо результат у форматі, який очікує n8n.\n// Кожен об'єкт у масиві 'processedResults' загортається в { json:... }.\nreturn processedResults.map(item => ({ json: item }));"
+      },
+      "id": "b1c2d3e4-f5a6-b7c8-d9e0-f1a2b3c4d5e6",
+      "name": "Filter & Process Tender Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        450,
+        300
+      ],
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Filter & Process Tender Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
