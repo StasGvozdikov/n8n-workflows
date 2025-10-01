@@ -1,0 +1,396 @@
+{
+  "name": "Data_collection_Prozorro/n8n",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "0395da17-2cfb-4318-afcc-201227e32acf",
+      "name": "When clicking ‘Execute workflow’",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "6cad91dd-7245-4038-ae1c-5a3f274bdff5",
+      "name": "2. Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        416,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1uinn_9Cxb86XQIyijKNK1AchHYcyA2h_MMXPd4dw8Og",
+          "mode": "list",
+          "cachedResultName": "Test_data_lot_t_n",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1uinn_9Cxb86XQIyijKNK1AchHYcyA2h_MMXPd4dw8Og/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1uinn_9Cxb86XQIyijKNK1AchHYcyA2h_MMXPd4dw8Og/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "6af8166c-3502-4c10-9c2c-13ff47cb1deb",
+      "name": "1. Test_data_lot_t_n",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        208,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Y0ZaUfrGnJLTOznS",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://public-api.prozorro.gov.ua/api/2.5/tenders/{{$json.ID}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "id": "78994ee1-0cfa-479b-ab2a-23e8d394710e",
+      "name": "4. HTTP Request: Get Tender Data from Prozorro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Отримуємо дані з попереднього кроку\nconst inputData = $input.all();\n\n// Масив для зберігання документів, які потрібно завантажити\nconst documentsToDownload = [];\n\n// Перебираємо кожен елемент з попереднього кроку\nfor (const item of inputData) {\n  const data = item.json.data;\n  \n  // Перевіряємо наявність масиву bids\n  if (data && data.bids) {\n    for (const bid of data.bids) {\n      // Отримуємо ім'я компанії учасника\n      const companyName = bid.tenderers && bid.tenderers[0] && bid.tenderers[0].name\n        ? bid.tenderers[0].name\n        : 'Unknown Company';\n      \n      // Перевіряємо наявність документів у даного учасника\n      if (bid.documents && bid.documents.length > 0) {\n        // Перебираємо всі документи одного учасника\n        for (const doc of bid.documents) {\n          const docTitle = doc.title.toLowerCase();\n          \n          // ОНОВЛЕНО: Додано пошук за словом \"працівники\"\n          // Це дозволить знайти документи, навіть якщо вони не названі \"сертифікат\"\n          const hasKeyword = docTitle.includes('сертифікат') || docTitle.includes('кваліфікація') || docTitle.includes('працівники');\n          \n          // Перевіряємо розширення файлу\n          const isTargetFormat = ['.pdf', '.zip', '.rar', '.7z'].some(ext => docTitle.endsWith(ext));\n          \n          // Якщо документ відповідає нашим критеріям, додаємо його до списку\n          if (hasKeyword && isTargetFormat) {\n            documentsToDownload.push({\n              json: {\n                companyName: companyName,\n                documentUrl: doc.url,\n                documentTitle: doc.title\n              }\n            });\n          }\n        }\n      }\n    }\n  }\n}\n\n// Повертаємо список документів, готових для завантаження на наступному кроці\nreturn documentsToDownload;"
+      },
+      "id": "5ed64ec1-02a4-4048-80ef-9db4c6b6936f",
+      "name": "5. Code Extract Document URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.documentUrl}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "26749d97-2dc4-4629-ab98-78a86718b667",
+      "name": "6. HTTP Request: Download Document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a9709b99-ec8d-414e-9e9f-ffe33c2dda23",
+              "leftValue": "={{$json.documentTitle}}",
+              "rightValue": ".zip",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              }
+            },
+            {
+              "id": "f79aed84-dfa8-479d-998e-d4a9f26fca0f",
+              "leftValue": "={{$json.documentTitle}}",
+              "rightValue": ".rar",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              }
+            },
+            {
+              "id": "31969a5a-d102-4521-a3f1-d002f23b207a",
+              "leftValue": "={{$json.documentTitle}}",
+              "rightValue": ".7z",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "f0fb34aa-1505-44bb-b004-383152ce8d37",
+      "name": "7. If: Is it an Archive?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1328,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "decompress"
+      },
+      "id": "3e1ed1bd-69f6-4d5d-9c02-81ed4d428019",
+      "name": "Decompress",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        1536,
+        -80
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "cf01d112-2ca9-494b-9188-fcc7fca34e8f",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1776,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash-lite-preview-06-17",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash-lite-preview-06-17"
+        },
+        "text": "{\n  \"role\": \"You are a highly precise data extraction engine specializing in Ukrainian official documents. Your only function is to analyze the provided document and return a structured JSON object based on the rules below.\",\n  \"task\": \"From the document provided, extract the following fields for the certified specialist.\",\n  \"fields_to_extract\": [\n    \"certificateNumber\",\n    \"profession\",\n    \"fullName\"\n   ],\n  \"output_rules\": {\n    \"format\": \"Strictly return a single, valid JSON object. Do not include any text, explanations, or markdown formatting before or after the JSON object.\",\n    \"schema\": {\n      \"certificateNumber\": \"string or null\",\n      \"profession\": \"string or null\",\n      \"fullName\": \"string or null\"\n    },\n    \"behavior\": \"Extract data literally from the text. Be factual and precise. Do not interpret, guess, or generate information. If a specific piece of information cannot be found in the document, the value for that key must be null.\"\n  }\n}",
+        "inputType": "binary",
+        "options": {
+          "maxOutputTokens": 300
+        }
+      },
+      "id": "6da15702-658a-412b-a678-7350ae52a11b",
+      "name": "Analyze document",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        2112,
+        16
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Q0SL8n39GTYMdCYp",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "d5583e82-e504-4a30-ac8b-77ab7e1688b3",
+      "name": "Edit Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2416,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "binary": [
+            {
+              "name": "data",
+              "value": "={{ $item(0).binary.data ?? $item(0).binary.file_0 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d50b29cc-b653-4b34-bef6-fb3439e990dd",
+      "name": "Rename Binary Data to 'data'",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1936,
+        16
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "1. Test_data_lot_t_n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "4. HTTP Request: Get Tender Data from Prozorro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Test_data_lot_t_n": {
+      "main": [
+        [
+          {
+            "node": "2. Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. HTTP Request: Get Tender Data from Prozorro": {
+      "main": [
+        [
+          {
+            "node": "5. Code Extract Document URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Code Extract Document URLs": {
+      "main": [
+        [
+          {
+            "node": "6. HTTP Request: Download Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. HTTP Request: Download Document": {
+      "main": [
+        [
+          {
+            "node": "7. If: Is it an Archive?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. If: Is it an Archive?": {
+      "main": [
+        [
+          {
+            "node": "Decompress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Decompress": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Rename Binary Data to 'data'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Binary Data to 'data'": {
+      "main": [
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4f9cf101-5c90-4836-b80d-528d1bc2f25a",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "zOdH9OTLvlKHi1RV",
+  "tags": []
+}
